@@ -9,6 +9,8 @@
 <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-green"></a>
 </p>
 
+**简体中文** | [English](README.en.md)
+
 </div>
 
 本仓库是 [syv-ai/HyperQwen](https://github.com/syv-ai/HyperQwen) 的
