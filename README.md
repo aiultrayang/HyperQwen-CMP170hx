@@ -50,7 +50,7 @@ sm_80，显存解锁 64 GiB），针对这张卡做内核调优、GA100 必需�
 bench-web 套件 28 项、0 失败；`temperature=0`，逐项 `cache_salt` 隔离前缀
 缓存，流式按 token_ids 计数（run ID `20261109-084416`）：
 
-<a href="opt-170hx/benchmarks/bench-20261109-084416.png"><img src="opt-170hx/benchmarks/bench-20261109-084416.png" alt="bench-web report 20261109-084416" width="480"></a>
+<a href="opt-170hx/benchmarks/bench-20261109-084416.png"><img src="opt-170hx/benchmarks/bench-20261109-084416.png" alt="bench-web report 20261109-084416" width="100%"></a>
 
 | 指标 | 数值 |
 |---|---|
