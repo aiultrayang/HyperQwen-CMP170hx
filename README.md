@@ -45,8 +45,10 @@ sm_80，显存解锁 64 GiB），针对这张卡做内核调优、GA100 必需�
 
 ## 实测：2026-11-09 端到端基准
 
-单张 CMP 170HX（64 GiB）部署，`Qwen3.8-27B-W4A16-AutoRound` + DFlash2，
-`CTX=fast`、`NSEG=16`、`MIN_BATCH=0`、`MAX_SEQS=8`、256K 上下文。
+单张 CMP 170HX（64 GiB）部署，目标模型 `Qwen3.8-27B-W4A16-AutoRound`（W4A16：
+INT4 group-128 线性层权重 + BF16 激活，lm_head/embedding 保持 BF16，约
+25 GB）+ DFlash2 草模型（W4A16，约 1.3 GB），`CTX=fast`、`NSEG=16`、
+`MIN_BATCH=0`、`MAX_SEQS=8`、256K 上下文。
 bench-web 套件 28 项、0 失败；`temperature=0`，逐项 `cache_salt` 隔离前缀
 缓存，流式按 token_ids 计数（run ID `20261109-084416`）：
 

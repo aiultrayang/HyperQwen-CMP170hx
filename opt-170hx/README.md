@@ -149,10 +149,11 @@ C1 192K, so it is only worth using if C4 long-context traffic dominates.
 ## End-to-end benchmark (2026-11-09)
 
 The tuned deployment measured as a whole, not per kernel. One CMP 170HX 64 GiB
-(four-card box, GPU 0), `Qwen3.8-27B-W4A16-AutoRound` (the BF16-heads export)
-+ the DFlash2 drafter, `CTX=fast`, `NSEG=16`, `MIN_BATCH=0`, `MAX_SEQS=8`,
-256K context, served by the stock image with the four bind-mounted files of
-this directory. bench-web suite: 28 checks, 0 failures, OpenAI-compatible API,
+(four-card box, GPU 0), `Qwen3.8-27B-W4A16-AutoRound` + the DFlash2 drafter
+(both W4A16: INT4 group-128 linear weights, BF16 activations; this target
+export keeps the lm_head and embeddings BF16 — ~25 GB target, ~1.3 GB drafter
+on disk), `CTX=fast`, `NSEG=16`, `MIN_BATCH=0`, `MAX_SEQS=8`, 256K context,
+served by the stock image with the four bind-mounted files of this directory. bench-web suite: 28 checks, 0 failures, OpenAI-compatible API,
 streaming, counted by token IDs, `temperature=0`, per-item `cache_salt` so the
 prefix cache cannot flatter the numbers; fixed-length rows use `ignore_eos`,
 HumanEval uses natural EOS / official stop. Run ID `20261109-084416`, seed
@@ -210,7 +211,6 @@ HumanEval uses natural EOS / official stop. Run ID `20261109-084416`, seed
   decode 308.9 tok/s. Synthetic `code` mode (334.3 tok/s) sits ~10% above the
   real prompts because real tasks stop early and accept differently — the two
   are complementary references, not substitutes.
-- The 69.5k-token prefill was run last, cold cache, on purpose.
 
 ### Reproducing
 
