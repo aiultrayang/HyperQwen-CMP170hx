@@ -22,7 +22,7 @@ sm_80，显存解锁 64 GiB），针对这张卡做内核调优、GA100 必需�
 
 | | |
 |---|---|
-| GPU | NVIDIA CMP 170HX — GA100（sm_80），108 SM |
+| GPU | NVIDIA CMP 170HX — GA100（sm_80），74 SM |
 | 显存 | **64 GiB HBM2e**（公开规格 8 GiB，本卡已解锁） |
 | 互联 | PCIe Gen2 |
 | 驱动 | 610.57.04 |

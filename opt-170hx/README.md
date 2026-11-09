@@ -82,7 +82,7 @@ Why these values:
   there too.
 - **`NSEG=16`** is fixed instead of adaptive. Adaptive is fine at C4 but at C8
   long context it creates only 2 segments → `8 × 1 × 4 × 2 = 64` blocks,
-  leaving 44 of the 108 GA100 SMs idle (4.6% slower than fixed 16).
+  leaving 10 of the 74 SMs on this card idle (4.6% slower than fixed 16).
 - **`VERIFY=0`** while the bind mounts are active: `verify.sh` matches patch
   lines and will report these files as modified.
 - **`VLLM_MARLIN_REPACK_STAGED=1`** and
