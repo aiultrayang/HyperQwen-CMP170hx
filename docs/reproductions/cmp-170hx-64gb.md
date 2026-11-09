@@ -116,3 +116,17 @@ and fixed 16 KV segments. See
 and the full A/B numbers. Headline: same seeds and prefix-warmed prompts show
 ~13% lower verify-step time at C4 and C8 on 32K inputs, +17–25% at 128K–256K
 single stream, and no regression on the 256/256 short protocol.
+
+## End-to-end deployment benchmark (2026-11-09)
+
+The 0.32.0 tuning measured as a served whole: one CMP 170HX 64 GiB,
+`Qwen3.8-27B-W4A16-AutoRound` + DFlash2, `CTX=fast`, `NSEG=16`, `MIN_BATCH=0`,
+`MAX_SEQS=8`, 256K context. 28-item bench-web suite, 0 failures:
+single-stream peak **413.0 tok/s** (counting @2000), c8 aggregate
+**1,352.7 tok/s** (×3.28 over c1), 69.5k-token cold prefill at **1,783.8
+tok/s**, HumanEval (20 prompts, official raw completions, serial) mean
+**301.3 tok/s** (P95 406.8). The verify-step rate stayed at 52.3–53.1 steps/s
+on every row, so all throughput spread is speculative acceptance, not engine
+slowdown. Full tables and methodology in
+[`opt-170hx/README.md`](../../opt-170hx/README.md); screenshot:
+[bench-20261109-084416.png](../../opt-170hx/benchmarks/bench-20261109-084416.png).

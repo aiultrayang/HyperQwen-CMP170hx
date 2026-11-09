@@ -146,6 +146,78 @@ TILE=64 is worth ~13% at both C4 and C8. Adaptive segments cost 4.6% at C8.
 NSEG=32 gains another 3.5% at C4 but is ~0.5% worse at C1 32K and ~2% worse at
 C1 192K, so it is only worth using if C4 long-context traffic dominates.
 
+## End-to-end benchmark (2026-11-09)
+
+The tuned deployment measured as a whole, not per kernel. One CMP 170HX 64 GiB
+(four-card box, GPU 0), `Qwen3.8-27B-W4A16-AutoRound` (the BF16-heads export)
++ the DFlash2 drafter, `CTX=fast`, `NSEG=16`, `MIN_BATCH=0`, `MAX_SEQS=8`,
+256K context, served by the stock image with the four bind-mounted files of
+this directory. bench-web suite: 28 checks, 0 failures, OpenAI-compatible API,
+streaming, counted by token IDs, `temperature=0`, per-item `cache_salt` so the
+prefix cache cannot flatter the numbers; fixed-length rows use `ignore_eos`,
+HumanEval uses natural EOS / official stop. Run ID `20261109-084416`, seed
+20260922.
+
+![bench-web report, run 20261109-084416](benchmarks/bench-20261109-084416.png)
+
+### Headline
+
+| metric | value |
+| --- | --- |
+| single-stream peak | **413.0 tok/s** (c1, counting, 2000-token output) |
+| verify-step rate | 52.3–53.1 steps/s (18.8–19.1 ms/step) on every row |
+| c8 aggregate | **1,352.7 tok/s** (×3.28 over c1) |
+| c8 per client | 173.2 tok/s, TTFT 309 ms |
+| prefill, 69,503 actual tokens | TTFT 38.96 s → **1,783.8 tok/s** |
+| HumanEval, 20 prompts, serial c1 | mean **301.3 tok/s** (P50 281.7 / P95 406.8 / max 422.7), TTFT 131 ms |
+
+### Single stream (concurrency 1, 3-round mean)
+
+| rows · mode | tok/s | steps/s | ms/step | accepted/step | TTFT ms | out tok |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 500 · counting | 405.2 | 52.8 | 18.9 | 7.58 | 129 | 500 |
+| 500 · code | 334.3 | 53.1 | 18.8 | 6.21 | 171 | 385 |
+| 500 · decode | 139.8 | 53.0 | 18.9 | 2.63 | 140 | 500 |
+| 500 · prose | 82.5 | 52.9 | 18.9 | 1.56 | 138 | 500 |
+| 2000 · counting | 413.0 | 52.3 | 19.1 | 7.87 | 138 | 2000 |
+| 2000 · code | 333.0 | 52.9 | 18.9 | 6.21 | 171 | 385 |
+| 2000 · decode | 165.7 | 52.3 | 19.1 | 3.16 | 141 | 2000 |
+| 2000 · prose | 119.8 | 52.4 | 19.1 | 2.29 | 135 | 2000 |
+
+### Concurrency sweep (counting, cap 8 = `MAX_SEQS`)
+
+| rows · c | batch tok/s | per client tok/s | TTFT ms | accepted/step |
+| --- | ---: | ---: | ---: | ---: |
+| 500 · c1 | 406.9 | 406.9 | 137 | 7.58 |
+| 500 · c2 | 688.6 | 346.3 | 136 | 7.58 |
+| 500 · c4 | 1,031.2 | 266.3 | 253 | 7.14 |
+| 500 · c8 | 1,216.9 | 156.9 | 303 | 6.53 |
+| 2000 · c1 | 412.8 | 412.8 | 139 | 7.87 |
+| 2000 · c2 | 699.4 | 349.9 | 139 | 7.87 |
+| 2000 · c4 | 1,110.6 | 277.8 | 156 | 7.87 |
+| 2000 · c8 | 1,352.7 | 173.2 | 309 | 7.53 |
+
+### Reading
+
+- The step rate is flat across every row and content type; all throughput
+  spread comes from how many speculative tokens each verify step accepts
+  (7.87 tok/step on counting @2000, 1.56 on prose @500), not from the engine
+  slowing down — consistent with the kernel A/B above. Low-acceptance content
+  types are the candidates for a shorter speculation length.
+- HumanEval used the official raw-completion endpoint (`/v1/completions`),
+  20 prompts from the official 164-prompt set, `max_tokens=512`, serial
+  single requests, official stop sequences; mean output 41 tok, token-weighted
+  decode 308.9 tok/s. Synthetic `code` mode (334.3 tok/s) sits ~10% above the
+  real prompts because real tasks stop early and accept differently — the two
+  are complementary references, not substitutes.
+- The 69.5k-token prefill was run last, cold cache, on purpose.
+
+### Reproducing
+
+Harness: `benchmark-vllm.mjs` + `benchmark-humaneval.mjs` (Node, OpenAI
+protocol). Run ID `20261109-084416`; `summary.json` and the raw jsonl files
+live under `~/bench-results/bench-web-20261109-084416` on the measuring box.
+
 ## Caveats
 
 - Not measured: C8 at 64K+ (8 × 64K ≈ 89% of the 589k-token pool) and more
