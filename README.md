@@ -1,268 +1,125 @@
 <div align="center">
 
-<h1>HyperQwen</h1>
+<h1>HyperQwen-CMP170hx</h1>
 
-<p><b>Large Qwen models, served fast on the GPUs people actually own.</b></p>
+<p><b>Qwen3.8-27B served fast on a CMP 170HX — 64 GiB HBM2e, 256K context, 413 tok/s single stream.</b></p>
 
 <p>
-<a href="https://github.com/syv-ai/HyperQwen/actions/workflows/docker-image.yml"><img alt="docker image" src="https://github.com/syv-ai/HyperQwen/actions/workflows/docker-image.yml/badge.svg"></a>
-<a href="https://github.com/syv-ai/HyperQwen/actions/workflows/patch-integrity.yml"><img alt="patch integrity" src="https://github.com/syv-ai/HyperQwen/actions/workflows/patch-integrity.yml/badge.svg"></a>
-<a href="https://github.com/syv-ai/HyperQwen/pkgs/container/hyperqwen"><img alt="ghcr.io" src="https://img.shields.io/badge/ghcr.io-syv--ai%2Fhyperqwen-2496ED?logo=docker&logoColor=white"></a>
 <a href="https://github.com/vllm-project/vllm"><img alt="vLLM 0.32.0" src="https://img.shields.io/badge/vLLM-0.32.0-5C3EE8"></a>
-<a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/github/license/syv-ai/HyperQwen"></a>
-<a href="https://github.com/syv-ai/HyperQwen/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/syv-ai/HyperQwen?style=flat"></a>
-<a href="https://ko-fi.com/mhenrichsen"><img alt="support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support%20GPU%20time-FF5E5B?logo=kofi&logoColor=white"></a>
+<a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-green"></a>
 </p>
-
-<a href="docs/media/demo.mp4"><img src="docs/media/demo.avif" alt="HyperQwen on one RTX 3090: one request against stock vLLM, replayed from recorded token arrivals, then 64 requests at once" width="100%"></a>
-
-<sub>One request against stock vLLM, replayed in real time from recorded token arrivals, then 64 at once.
-<a href="docs/media/demo.mp4">1080p60 MP4</a> · <a href="bench/demo">how it is made</a></sub>
 
 </div>
 
-**Today:** [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) on a single 24 GB
-consumer GPU with vLLM — 150k token context and an OpenAI-compatible API with key
-auth, in two ready-made modes. On an RTX 3090 at 250 W: 127 tok/s single-stream
-in single-user mode, ~1,035 tok/s aggregate decode at 64 concurrent in batch mode,
-and 381 tok/s when the answer quotes its own prompt.
+本仓库是 [syv-ai/HyperQwen](https://github.com/syv-ai/HyperQwen) 的
+**CMP 170HX 适配分支**。上游把 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
++ DFlash2 投机解码跑在 24 GiB 的 RTX 3090 上；这里把同一套 vLLM 0.32.0 栈
+（约 50 个补丁 + KVarN 长上下文后端）搬到 **NVIDIA CMP 170HX**（GA100 /
+sm_80，显存解锁 64 GiB），针对这张卡做内核调优、GA100 必需修复，并留下完整
+的实测记录。
 
-**Where it is going:** more Qwen models, more classes of card. What this repo
-really is, under the serving setup, is a patch series against a pinned vLLM plus
-a model-preparation pipeline — requantized heads, a calibrated draft vocabulary,
-speculation that drafts out of the prompt. Most of that is not specific to one
-checkpoint or one card; it is just that one checkpoint and one card are what has
-been measured to death. See [Roadmap](#roadmap-more-qwen-models-more-cards) for
-what is and is not portable yet, and
-[Field tests wanted](#field-tests-wanted) if you have half an hour on a GPU we
-have never touched.
+## 这张卡
 
-## Quick start
+| | |
+|---|---|
+| GPU | NVIDIA CMP 170HX — GA100（sm_80），108 SM |
+| 显存 | **64 GiB HBM2e**（公开规格 8 GiB，本卡已解锁） |
+| 互联 | PCIe Gen2 |
+| 驱动 | 610.57.04 |
+
+64 GiB 改变了什么：
+
+- **上下文 64K → 256K**（`MAX_LEN=262136`），`GPU_UTIL=0.90` 下 KV 池约
+  58.9 万 token，单用户模式 8 路并发各自拉满长上下文仍有余量；
+- GA100 每个 block **163 KB shared memory**（sm86 为 99 KB），split-KV verify
+  kernel 因此能用 64-token KV tile —— 这是 [`opt-170hx/`](opt-170hx/) 调优的
+  物理基础；
+- W4A16 权重只占显存约四成，其余几乎全部给了 KV。
+
+上游把 sm_80 列为"存在未定位的投机故障"
+（[#98](https://github.com/syv-ai/HyperQwen/issues/98)、
+[#72](https://github.com/syv-ai/HyperQwen/issues/72)）。本仓库在 610.57.04
+驱动上**未能复现**该故障 —— 注意这不等价于"故障已消失"，只是第三块 sm_80 的
+证据；调查过程见
+[docs/reproductions/cmp-170hx-64gb.md](docs/reproductions/cmp-170hx-64gb.md)。
+
+## 实测：2026-11-09 端到端基准
+
+单张 CMP 170HX（64 GiB）部署，`Qwen3.8-27B-W4A16-AutoRound` + DFlash2，
+`CTX=fast`、`NSEG=16`、`MIN_BATCH=0`、`MAX_SEQS=8`、256K 上下文。
+bench-web 套件 28 项、0 失败；`temperature=0`，逐项 `cache_salt` 隔离前缀
+缓存，流式按 token_ids 计数（run ID `20261109-084416`）：
+
+<a href="opt-170hx/benchmarks/bench-20261109-084416.png"><img src="opt-170hx/benchmarks/bench-20261109-084416.png" alt="bench-web report 20261109-084416" width="480"></a>
+
+| 指标 | 数值 |
+|---|---|
+| 单流峰值 | **413.0 tok/s**（c1 · counting，2000 token 输出，greedy） |
+| 真实代码 HumanEval（20 题，串行 c1） | 平均 **301.3 tok/s**（P50 281.7 / P95 406.8 / 最快 422.7），TTFT 131 ms |
+| 并发聚合 | **1,352.7 tok/s** @ c8（×3.28），单客户端 173.2 tok/s，TTFT 309 ms |
+| 长文本 prefill | 69,503 token，TTFT 38.96 s → **1,783.8 tok/s** |
+| verify 步频 | 全部档位恒定 **52.3–53.1 步/s**（18.8–19.1 ms/步） |
+
+步频恒定意味着吞吐差异全部来自每步被接受的投机 token 数（counting @2000 为
+7.87，散文 @500 为 1.56），而不是引擎被压慢 —— 调优后的 verify kernel 在这些
+长度上不再是瓶颈。完整表格、口径与复现方式见
+[`opt-170hx/README.md`](opt-170hx/README.md)，长图报告：
+[bench-20261109-084416.png](opt-170hx/benchmarks/bench-20261109-084416.png)。
+
+与上游 RTX 3090 的数字（127 tok/s 单流、~1,035 tok/s @ 64 并发、150K 上下文）
+不是同一协议、功耗档与并发上限，仅作量级参考，不构成 A/B。
+
+## 相对上游的改动
+
+1. **[`opt-170hx/`](opt-170hx/) — 170HX 内核调优**（bind-mount 四个 vLLM 源
+   文件，不重建镜像）：`D=256` 时 KV tile 32→64、`D>128` 用 8 warps、按批量
+   的 FA2 门控、固定 16 个 KV segment。同种子 A/B：C4/C8 32K verify 步时延
+   **约 13% ↓**，128–256K 单流 **+17–25%**，256/256 短协议无回退。
+2. **GA100 必需修复**（不是可选调优）：`VLLM_MARLIN_REPACK_STAGED=1` 与
+   `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False`，规避 Marlin 重排与
+   内存分配器在这张卡上的 Xid 31。
+3. **64 GiB 上下文配置**：`MAX_LEN=262136`、`MAX_SEQS=8`、`GPU_UTIL=0.90`。
+
+## 快速开始
+
+部署流程与上游一致，只是 `.env` 多一段 170HX 配置：
 
 ```bash
-git clone https://github.com/syv-ai/HyperQwen && cd HyperQwen
-cp .env.example .env                      # PowerShell: Copy-Item .env.example .env
-
-docker compose --profile single up -d     # one or a few people chatting
-docker compose --profile batch  up -d     # API backend, many concurrent requests
+git clone https://github.com/aiultrayang/HyperQwen-CMP170hx && cd HyperQwen-CMP170hx
+cp .env.example .env
+cat opt-170hx/170hx.env.example >> .env   # 170HX 调优 + GA100 必需项
+docker compose --profile single up -d
 ```
 
-First start pulls the image (9.5 GB) and requantizes the model (~20 GB, once,
-into `./models`), then serves on `:18020`. One GPU runs one mode at a time.
-
-- **Before exposing it** — compose publishes the port on `127.0.0.1` only (`BIND` in `.env`, default `127.0.0.1`), so another machine cannot reach it until you set a key and `BIND=0.0.0.0`; outside a container, no key means the server binds `127.0.0.1` only:
+- 首次启动拉取镜像并做一次性模型再量化（约 20 GB，写入 `./models`）。env 片段
+  中 `MODEL` 指向 AutoRound 导出布局（`/app/models/Qwen3.8-27B-W4A16-AutoRound`）；
+  本仓库全部实测使用该导出 + DFlash2 草模型，若用上游 prepare 的默认产物，按
+  其实际输出路径改 `MODEL`。
+- 默认只绑定 `127.0.0.1`；对外暴露前设置 key 并放开绑定：
   `echo "VLLM_API_KEY=$(openssl rand -hex 24)" >> .env && echo BIND=0.0.0.0 >> .env`
-- **Docker Desktop on WSL2** — keep `VLLM_WSL2_ENABLE_PIN_MEMORY=1` in `.env`, or
-  the V2 runner aborts with `RuntimeError: UVA is not available`
-- **No compose, or no Docker at all** —
-  [docs/docker.md](docs/docker.md#plain-docker-no-compose) ·
-  [docs/install.md](docs/install.md)
+- bind-mount 生效期间保持 `VERIFY=0`（`verify.sh` 按补丁行匹配，会把这些文件
+  报成已修改）。
+- batch 模式与多卡 TP 未在这张卡上实测；上游的 [batch/](batch/)、
+  [docs/multi-gpu.md](docs/multi-gpu.md) 仍然适用。
 
-## Which setup do I want?
-
-Three questions, and the answers are the whole of your `.env`.
-
-```mermaid
-flowchart TD
-  Q1{"Who is sending<br/>the requests?"}
-  Q1 -->|"an API backend, a pipeline,<br/>8+ at once"| A["<b>A — batch</b>"]
-  Q1 -->|"one or a few<br/>people chatting"| Q2{"Longest prompt<br/>you will send?"}
-  Q2 -->|"under 64k tokens"| Q3{"Do the answers quote<br/>the prompt back?"}
-  Q2 -->|"up to 150k"| D["<b>D — long context</b>"]
-  Q2 -->|"200k and beyond"| E["<b>E — huge context</b>"]
-  Q3 -->|"no — normal chat"| B["<b>B — single, default</b>"]
-  Q3 -->|"yes — code edits, RAG,<br/>rewrites, translation"| C["<b>C — reproduction</b>"]
-```
-
-Starting from the `.env` you copied in Quick start, which already ships **B**:
-
-| | change in `.env` | start with | what you get |
-|---|---|---|---|
-| **A** | nothing | `--profile batch` | ~1,035 tok/s aggregate at 64 concurrent |
-| **B** | nothing | `--profile single` | 127 tok/s single stream, 64k context |
-| **C** | add `DFLASH_TOKENS=15` | `--profile single` | 381 tok/s while quoting, at 4 slots and 56k |
-| **D** | `SPEC=mtp` and `CTX=long` | `--profile single` | 150k context, ~95-100 tok/s |
-| **E** | add `CTX=huge` | `--profile single` | 240k context, 67 tok/s mixed and 164 while quoting |
-
-Torn between B and C: B is the safe default, and C only pays off when the output
-really does repeat the input — it trades request slots and context for it. D drops
-back to MTP speculation on purpose, because DFlash2 past 64k is worth it only for
-reproduction and loses to `SPEC=mtp CTX=long` about 2:1 on everything else; at E
-the KVarN cache buys the context instead, so DFlash2 stays on. A needs no edit at
-all — batch ignores `SPEC` and says so on startup. Every knob, and what each costs:
-[single-user/README.md](single-user/README.md#if-you-are-the-only-user-do-this) ·
-[batch/README.md](batch/README.md).
-
-On a compute capability 8.6 GPU (RTX 3090-class), `SPEC=mtp CTX=long` and `SPEC=dflash2 CTX=long` run on an int8 KV cache read by the
-[pth-flash-attn](https://github.com/noon-at-cgn/pth-flash-attn) kernel by default (`PTH_FA=1`, source vendored in `pthfa/`): the target and the
-drafter on `--attention-backend CUSTOM --kv-cache-dtype int8_per_token_head`. That needs the package installed (the Docker image has it;
-`bash pthfa/install.sh` in a venv) and the measured setup ([docs/long-context.md](docs/long-context.md#int8-kv-on-the-pth-flash-attn-kernel-pth_fa1-specmtp-or-specdflash2-with-ctxlong)).
-Otherwise the arm keeps its own default, fp8 on FlashInfer on mtp and the FA2 arm below on dflash2, and `PTH_FA=0` restores it. Any other GPU,
-`CTX=fast`, `CTX=huge` and batch mode are unchanged. On the native RTX 3090 (TP=1, 250 W, vLLM 0.31.0, two boots per arm, [#345](https://github.com/syv-ai/HyperQwen/pull/345)),
-`SPEC=mtp CTX=long` decodes 84.7-84.8 tok/s at ~66k and 78.5 at ~100k against 75.5-75.6 and 68.8-68.9 with `PTH_FA=0` (+12.2% and +14.0%), with the same
-cold TTFT at ~66k and a 1.9% smaller KV pool; the ~95-100 tok/s of row D above is the fp8 + FlashInfer arm. Only compute capability 8.6 has been run on a GPU
-(3090 and 3080 here), on vLLM 0.31.0, and the kernel is forward only.
-
-Without the kernel (`PTH_FA=0`, or a launch outside its measured setup), `SPEC=dflash2 CTX=long` runs on fp8 KV with the FlashAttention-2 plugin in `fa2/` by default (`FA2_FP8KV=1`) on an RTX 3090-class
-GPU (compute capability 8.6); on any other GPU the default stays on int8 + Triton with a note, and `FA2_FP8KV=1` opts in on a 4090;
-`FA2_FP8KV=0` restores the int8 + Triton arm. Native installs need `bash fa2/install.sh` once, and the launcher refuses
-to start without it rather than fall back (the Docker image has it). `KV_OFFLOAD_GB` turns the default off with a note;
-an explicit `FA2_FP8KV=1` refuses it, and refuses any other `SPEC`/`CTX`. The evidence is the T4 battery on the native
-3090 ([#153](https://github.com/syv-ai/HyperQwen/issues/153)): on 2026-10-18 (bare metal, 250 W, vLLM 0.31.0) the fp8 + FA2 arm passed every bar against the shipped int8 + Triton arm: GSM8K 0.950 vs 0.955 (n=200), perplexity +0.04%, 0 of 128 residues broken, a 20-minute soak with no restart, decode 54.0 vs 48.2 tok/s at ~66k and 48.2 vs 37.9 tok/s at ~100k (+27%), cold TTFT 75.5 vs 132.3 s and 54.7 vs 130.5 s, and a 3.3% larger pool (140,902 vs 136,429 tokens).
-
-### The numbers behind that
-
-| | **batch** → [batch/](batch/) | **single** → [single-user/](single-user/) |
-|---|---|---|
-| **best for** | API backends, pipelines, many concurrent requests | one or a few people chatting |
-| **64 concurrent** (128 in / 512 out) | **~1,035 tok/s** decode, 948 e2e — ~1,222 with every layer int8 | n/a — 8 slots |
-| **single stream** (C1) | 46 tok/s | **127 tok/s** — 121 on the older MTP path |
-| **quoting its own prompt** | 46 tok/s | **381 tok/s** at 25k context |
-| **prefill**, 1k in | ~1,810 tok/s | ~1,440 — **~1,850-1,940** with `INT8_ACT=int8` |
-| **how** | 16-bit recurrent state, int8 tensor-core GEMMs | 7 drafts proposed per pass, 15 tokens verified per step off the context |
-
-Speculation wins below ~8 concurrent users, plain batching above — earlier on long
-sessions, where a speculating request reserves recurrent-state pages the pool has
-few of ([measurement](docs/long-context.md)). Both modes share one install.
-[Full prefill matrix](batch/README.md#prefill) ·
-[how each number was won](docs/optimizations.md).
-
-## Roadmap: more Qwen models, more cards
-
-The name changed because the scope did. This started as "Qwen3.8-27B on one RTX
-3090" and the README still reflects that, because that is the pair which has been
-measured properly. The plan is to widen both axes. Being specific about what
-transfers, since "supports N models" is easy to claim and expensive to be wrong
-about:
-
-**Portable already — nothing model- or card-specific in it.** The vLLM patch
-series (`patches/`, one line each in [PATCHES.md](PATCHES.md)), the
-KVarN long-context backend, int8 Marlin GEMM layer selection, the SSE keep-alive,
-the engine stall sentinel. These are vLLM fixes that happen to have been written
-here.
-
-**Model-specific, and this is the real work.** The int8-QK prefill attention
-kernel is gated on this checkpoint's exact geometry — `num_heads == 24`,
-`num_kv_heads == 4`, `head_size == 256` — and falls back to FA2 for anything
-else, so a new model gets correctness for free and none of the prefill win until
-the gate is generalized. The 40k-token draft vocabulary is calibrated on this
-model's own output distribution. The DFlash2 drafter is a per-model checkpoint.
-`prepare/` assumes a head layout that only just learned to handle heads in
-different shards ([#120](https://github.com/syv-ai/HyperQwen/issues/120)).
-
-**Card-specific.** The Marlin tune tables are measured on sm86. sm120 (RTX 5090)
-reproduces ([#35](https://github.com/syv-ai/HyperQwen/issues/35)); sm80 runs but
-has an open speculation fault at any k
-([#98](https://github.com/syv-ai/HyperQwen/issues/98),
-[#72](https://github.com/syv-ai/HyperQwen/issues/72)). Multi-GPU works at TP=2
-and TP=4; TP=3 and PP=3 are invalid for this model's head count, which is a
-property of the checkpoint rather than a missing feature.
-
-**What we want next.** Smaller Qwen checkpoints so 16 GB and 12 GB cards get the
-same treatment rather than a shrug; a larger one for 48 GB; the EXL3 route in
-[#103](https://github.com/syv-ai/HyperQwen/issues/103) as a second quantization
-path. If you want a specific model or card prioritized, say so in an issue — the
-order is mostly driven by who turns up with a reproduction.
-
-## Field tests wanted
-
-Every number above is one RTX 3090 at 250 W, shared with training jobs. Every
-row for any other card came from someone else running the harness — so the ask
-here is a protocol rather than "try it and let us know".
-
-**About 30 minutes on one GPU**, most of it unattended. The harness lives in
-the container, so it runs through `compose exec` — on a venv install drop that
-prefix and use `python` instead of `venv/bin/python`:
-
-```bash
-sudo nvidia-smi -pl 250                 # your card's reference wattage; say which
-docker compose --profile single up -d   # first start also prepares the model
-
-docker compose exec single bash bench/run_benchmarks.sh single   # discard: a first run after a start reads 30-50% low
-docker compose exec single bash bench/run_benchmarks.sh single   # keep this one — its ROW lines are the report
-
-docker compose exec single venv/bin/hf download openai/gsm8k --repo-type dataset \
-  --include "main/test-*" --local-dir bench/quality-data/gsm8k
-docker compose exec single venv/bin/pip install pyarrow   # only on images published before 2026-09-21
-docker compose exec single venv/bin/python bench/quality_battery.py mycard --gsm-only
-```
-
-`mycard` is a label you choose for this run (for example `rtx3090-250w`),
-not a model name. Results are saved to `bench/quality-data/result_mycard.json`.
-Use your service name in place of `single` when testing another Compose profile.
-
-Then open a
-[field report](https://github.com/syv-ai/HyperQwen/issues/new?template=field-report.yml).
-The form asks for the six things that make two runs comparable — card, power
-cap, driver, OS or container, commit, which setup letter — because without them
-a number cannot honestly be put next to the row above it. Ran something
-narrower, or with your own client? Post it anyway and say what you skipped; it
-gets listed as an independent report instead of a table row, which is what
-happened to most of
-[docs/reproductions/](docs/reproductions/README.md#results-from-other-hardware).
-
-**Most wanted, in order.** Several of these already have a thread with someone's
-hardware in it — check before you duplicate, and add to theirs if it matches:
-
-| | why it is worth your GPU hour |
-|---|---|
-| **sm90** — H100, H200 | The only architecture here with no datapoint at all. |
-| **sm80** — A100, A30, CMP 170HX | Two owners are mid-bisect on a speculation fault that only their cards produce ([#98](https://github.com/syv-ai/HyperQwen/issues/98), [#72](https://github.com/syv-ai/HyperQwen/issues/72)). A third sm80 box would separate the card from the build. |
-| **Four Ampere cards** | Four sm120 cards are measured ([#105](https://github.com/syv-ai/HyperQwen/issues/105)); nobody has run four 3090s, and two of them already give *less* aggregate throughput than one ([#135](https://github.com/syv-ai/HyperQwen/issues/135)). |
-| **12 GB cards, on the harness** | Two 3060s do serve this model ([#68](https://github.com/syv-ai/HyperQwen/issues/68)), reported with their owners' own clients — so the numbers cannot be set against the rows above. A harness run on that pair is most of what decides whether smaller Qwen checkpoints are worth preparing. |
-| **vLLM 0.32.0** ([docs/vllm-0.32.md](docs/vllm-0.32.md); 0.31.0 in [docs/vllm-0.31.md](docs/vllm-0.31.md), 0.30.0 in [docs/vllm-0.30.md](docs/vllm-0.30.md), 0.29.0 in [docs/vllm-0.29.md](docs/vllm-0.29.md)) | The pin this branch carries, measured on a native 3090 and a native 4090; the harness on it from any other card is the missing datapoint. |
-
-**What you get:** the run published in
-[docs/reproductions/](docs/reproductions/README.md) with your raw output and
-credit, the gotchas your platform exposes written into
-[docs/gotchas.md](docs/gotchas.md), and an honest account of what your hardware
-does badly — historically the more useful half.
-
-**Rather give hardware or money than time?** A box we can reach, or credits:
-open an issue titled "compute offer". Otherwise
-[ko-fi.com/mhenrichsen](https://ko-fi.com/mhenrichsen) buys hours on cards this
-project does not own, and those runs get written up here like any other
-reproduction.
-
-## Documentation
-
-Everything that used to be in this README, in the folder it belongs to.
-
-**Running it**
+## 文档
 
 | | |
 |---|---|
-| [batch/](batch/) · [single-user/](single-user/) | The two serving modes: full benchmark tables, every env knob, systemd units. |
-| [docs/install.md](docs/install.md) | The bare-metal venv install, for when you are not using the container. |
-| [docs/docker.md](docs/docker.md) | The container image, and an independent WSL2 reproduction. |
-| [docs/clients.md](docs/clients.md) | Pointing coding agents and OpenAI-protocol clients at the server. |
-| [docs/multi-gpu.md](docs/multi-gpu.md) | What transfers to a second card, and which tensor-parallel shapes this model allows. |
-| [docs/third-party-checkpoints.md](docs/third-party-checkpoints.md) | Serving a checkpoint other than the base model, and what has to be re-prepared. |
+| [`opt-170hx/README.md`](opt-170hx/README.md) | 170HX 调优：改动、部署、内核 A/B、2026-11-09 端到端基准 |
+| [`opt-170hx/patches/`](opt-170hx/patches/) | 同一改动的 patch 形式（免 bind-mount 安装） |
+| [docs/reproductions/cmp-170hx-64gb.md](docs/reproductions/cmp-170hx-64gb.md) | sm_80 投机故障调查、0.32.0 调优与基准的完整记录 |
+| [PATCHES.md](PATCHES.md) · [docs/optimizations.md](docs/optimizations.md) · [single-user/](single-user/) | 上游的补丁清单、优化原理与运行手册（对本分支同样有效） |
 
-**How it works, and how fast**
+## 致谢
 
-| | |
-|---|---|
-| [docs/optimizations.md](docs/optimizations.md) | Every optimization in full: why it was needed, what it measured, which patch implements it — including what each step buys in tokens per second, the two speculative-decoding modes, and the lookup drafter. |
-| [docs/benchmarks.md](docs/benchmarks.md) | The comparison against ninfer-3090, and quality per configuration. |
-| [docs/quality.md](docs/quality.md) | IFBench, perplexity and GSM8K per configuration. |
-| [docs/long-context.md](docs/long-context.md) | 262k context with the KVarN 4/2-bit KV cache, `CTX=huge` with DFlash2 at 240k, vLLM's own per-token-head KV modes, the int8 KV route on the pth-flash-attn kernel (`PTH_FA=1`, `SPEC=mtp` or `SPEC=dflash2` at `CTX=long`), and the experimental int4 route. |
-| [docs/reproductions/](docs/reproductions/README.md) | Other people's hardware running this stack, reports and full write-ups. |
-| [docs/gotchas.md](docs/gotchas.md) | Things that each cost us hours — read before debugging something that looks like a vLLM bug. |
-
-**Building it**
-
-| | |
-|---|---|
-| [PATCHES.md](PATCHES.md) | One line per patch in `patches/`: what it does, its upstream reference, and what retires it. |
-| [docs/spec-decode-scratch-token-units.md](docs/spec-decode-scratch-token-units.md) | Why the speculative-decode scratch buffer is sized in tokens, and the int4 MQ-3D verify kernel — the design notes behind two of the patches. |
-| [prepare/](prepare/) | The one-time model-preparation scripts (also `docker compose run --rm prepare`). |
-| [drafter/](drafter/) | How the draft vocabulary, the int4 drafters and the DFlash2 requantization were built — including what did not work. |
-| [kvarn/](kvarn/) | The KVarN 4/2-bit KV cache port. |
-| [fa2/](fa2/) | The fp8-KV FlashAttention-2 source port (optional; `bash fa2/install.sh` builds it, `FA2_FP8KV=1` selects it). |
-| [pthfa/](pthfa/README.md) | The vendored source of [pth-flash-attn](https://github.com/noon-at-cgn/pth-flash-attn) v0.1.0, the int8-KV attention kernel (optional; `bash pthfa/install.sh` builds it, `PTH_FA=1` selects it, and it is the default for `SPEC=mtp CTX=long` and `SPEC=dflash2 CTX=long` on a compute capability 8.6 GPU). |
-| [xgrammar/](xgrammar/) | A source build of xgrammar with the bounded-string fix for Qwen tool calls (`bash xgrammar/install.sh`); without it a tool schema's `maxLength` drops decode to ~7 tok/s under `TOOL_STRICT=parameter`. |
+本仓库 fork 自 [syv-ai/HyperQwen](https://github.com/syv-ai/HyperQwen)。
+原项目面向 24 GiB 消费级 RTX 3090：vLLM 0.32.0 补丁系列（`patches/`）、KVarN
+长上下文后端（`kvarn/`）、DFlash2 投机解码与 4 万 token 草词表校准
+（`drafter/`）、模型再量化管线（`prepare/`）、容器镜像与 bench 套件，全部出自
+原项目及其贡献者。本分支只做了一件事：让这套栈在 CMP 170HX 上跑满 —— 内核
+调优、GA100 修复与实测记录。核心工作属于原项目。
 
 ## License
 
-Apache-2.0, same as the model.
+Apache-2.0，与模型一致。
