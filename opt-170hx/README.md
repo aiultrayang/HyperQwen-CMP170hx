@@ -220,8 +220,9 @@ live under `~/bench-results/bench-web-20261109-084416` on the measuring box.
 
 ## Caveats
 
-- Not measured: C8 at 64K+ (8 × 64K ≈ 89% of the 589k-token pool) and more
-  than 8 streams.
+- Not measured: C8 at 64K+ (8 × 64K ≈ 93% of the 565,684-token pool on the
+  25 GB export; 607,096 tokens with the 16 GB `-fast` one) and more than 8
+  streams.
 - The TILE=64 gain is a GA100 shared-memory fact; do not assume it on sm86.
   The `OutOfResources` retry keeps the kernel correct elsewhere, but there is
   no gain to expect there.

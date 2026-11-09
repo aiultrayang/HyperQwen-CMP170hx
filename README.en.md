@@ -33,8 +33,8 @@ card, GA100-required fixes, and a full measurement record.
 What 64 GiB changes:
 
 - **Context 64K → 256K** (`MAX_LEN=262136`); at `GPU_UTIL=0.90` the KV pool is
-  about 589k tokens, so eight single-user streams at full long context still
-  fit with room to spare;
+  565,684 tokens (measured) — full-256K requests run 2.16 at once (the
+  engine's own accounting), or eight streams at ~64K each;
 - GA100 has **163 KB of shared memory per block** (sm86: 99 KB), so the
   split-KV verify kernel can use a 64-token KV tile — the physical basis of the
   [`opt-170hx/`](opt-170hx/) tuning;

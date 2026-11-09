@@ -31,8 +31,9 @@ sm_80，显存解锁 64 GiB），针对这张卡做内核调优、GA100 必需�
 
 64 GiB 改变了什么：
 
-- **上下文 64K → 256K**（`MAX_LEN=262136`），`GPU_UTIL=0.90` 下 KV 池约
-  58.9 万 token，单用户模式 8 路并发各自拉满长上下文仍有余量；
+- **上下文 64K → 256K**（`MAX_LEN=262136`），`GPU_UTIL=0.90` 下 KV 池
+  565,684 token（实测）——满 256K 可同时跑 2.16 路（引擎口径），8 路并发
+  可同时承载约 64K 上下文；
 - GA100 每个 block **163 KB shared memory**（sm86 为 99 KB），split-KV verify
   kernel 因此能用 64-token KV tile —— 这是 [`opt-170hx/`](opt-170hx/) 调优的
   物理基础；
