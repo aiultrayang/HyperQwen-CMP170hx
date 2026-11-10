@@ -18,9 +18,24 @@ tile does not fit.
 
 The measurements below were taken on the 2026-11-07 0.32.0 cut with
 `Qwen3.8-27B-W4A16-AutoRound` + the DFlash2 drafter (`k=7`), BF16 KV,
-`CTX=fast`, 256K context, driver 610.57.04, card pinned at 180 W. The kernel
-math did not change in the re-cut, so the deltas carry over; a re-run on the
-0.33.0 pin is pending.
+`CTX=fast`, 256K context, driver 610.57.04, card pinned at 180 W.
+
+A first re-run on the 0.33.0 pin (2026-11-10, the `-fast` export, stock
+image + overlay vs stock image, prefix-warmed, median of two) changes the
+picture and is the reason this overlay is **opt-in per shape**, not a
+universal win:
+
+| shape (32K in) | stock 0.33 | overlay | delta |
+| --- | --- | --- | --- |
+| C4 verify step | **39.3 ms** | 41.9 ms | overlay −6.6% |
+| C8 verify step | **65.6 ms** | 68.7 ms | overlay −4.7% |
+| single stream, 131K in, verify step | 38.3 ms | **34.8 ms** | overlay **+9.2%** |
+
+The 0.33.0 rework (`spec-attn-fp16`) already took a large bite of what the
+0.32.0 tuning provided at concurrent short context — there the stock kernel
+now wins. The 64-token tile still pays at single-stream long context, which
+is exactly where a 170HX owner feels latency. Same seeds and prompts both
+legs; correctness `test_spec_decode_attn.py` 13/13 on both.
 
 ## Changes
 
